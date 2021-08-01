@@ -1,0 +1,142 @@
+#!/bin/sh
+
+set -e
+#set -x
+
+if ! [ -r /etc/oci-poc/oci-poc.conf ] ; then
+	echo "Cannot read /etc/oci-poc/oci-poc.conf"
+fi
+. /etc/oci-poc/oci-poc.conf
+
+# Check that we really have NUMBER_OF_GUESTS machines available
+# before starting anything
+check_enough_vms_available () {
+	EXPECTED_NUM_OF_SLAVES=${1}
+
+	NUM_VM=$(ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli -csv machine-list | q -d , -H "SELECT COUNT(*) AS count FROM -"')
+	if [ ${NUM_VM} -lt ${EXPECTED_NUM_OF_SLAVES} ] ; then
+		echo "Num of VM too low... exiting"
+		exit 1
+	fi
+}
+
+check_enough_vms_available $((${NUMBER_OF_GUESTS} - 1))
+
+echo "===> Creating regions and locations"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli swift-region-create swift-region1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli swift-region-create swift-region2'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli swift-region-create pub-region'
+
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli location-create reg-1-zone-1 swift-region2'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli location-create reg-2-zone-1 swift-region1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli location-create reg-2-zone-2 swift-region1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli location-create pub-zone pub-region'
+
+echo "===> Creating networks"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create reg1-zone1-net1 192.168.101.0 24 reg-1-zone-1 no'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create reg2-zone1-net1 192.168.103.0 24 reg-2-zone-1 no'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create reg2-zone2-net1 192.168.104.0 24 reg-2-zone-2 no'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create pub-net 192.168.106.0 24 pub-zone yes'
+
+# Set the IPMI network
+if [ "${USE_AUTOMATIC_IPMI_SETUP}" = "yes" ] ; then
+	echo "===> Setting-up automatic IPMI assignation"
+	ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create ipmi 192.168.200.0 24 reg-1-zone-1 no'
+	ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-set ipmi --role ipmi --ipmi-match-addr 192.168.0.0 --ipmi-match-cidr 16'
+	ssh ${HOST_NETWORK_PREFIX}.2 "sed -i s/automatic_ipmi_numbering=no/automatic_ipmi_numbering=yes/ /etc/openstack-cluster-installer/openstack-cluster-installer.conf" 1>/dev/null 2>/dev/null
+	ssh ${HOST_NETWORK_PREFIX}.2 "mkdir -p /var/www/.ssh" 1>/dev/null 2>/dev/null
+	ssh ${HOST_NETWORK_PREFIX}.2 "chown www-data:www-data /var/www/.ssh" 1>/dev/null 2>/dev/null
+fi
+
+echo "===> Creating cluster cl1"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-create cl1 example.com'
+
+echo "===> Adding networks to cl1"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add reg1-zone1-net1 cl1 all eth1 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add reg2-zone1-net1 cl1 all eth1 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add reg2-zone2-net1 cl1 all eth3 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add pub-net cl1 all eth0 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-set pub-net --role vip'
+
+echo "===> Adding controller nodes to cl1"
+# 3x Controller machines (includes Swift proxies)
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C1 cl1 controller reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C2 cl1 controller reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C3 cl1 controller reg-2-zone-2'
+
+echo "===> Adding network nodes to cl1"
+# 2x Network
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C4 cl1 network reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C5 cl1 network reg-2-zone-1'
+
+echo "===> Adding swiftproxy nodes to cl1"
+# 1x Swift proxy
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C6 cl1 swiftproxy reg-1-zone-1'
+
+echo "===> Adding cephmon nodes to cl1"
+# 3x Ceph Mon
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C7 cl1 cephmon reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C8 cl1 cephmon reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C9 cl1 cephmon reg-2-zone-2'
+
+echo "===> Adding compute nodes to cl1"
+# 2x Compute (with Ceph OSD hyperconverged)
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add CA cl1 compute reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add CB cl1 compute reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add CC cl1 compute reg-2-zone-1'
+# Lower the reserved memory, because we don't have much available
+echo "===> Setting nova-reserved-host-memory-mb to 8192"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set CA --nova-reserved-host-memory-mb 8192'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set CB --nova-reserved-host-memory-mb 8192'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set CC --nova-reserved-host-memory-mb 8192'
+
+#echo "===> Addig Ceph OSD feature to compute nodes"
+#ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set CA --compute-is-cephosd yes'
+#ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set CB --compute-is-cephosd yes'
+
+echo "===> Adding swiftstore nodes to cl1"
+# 5x Swift Store
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add CD cl1 swiftstore reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add CE cl1 swiftstore reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add CF cl1 swiftstore reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D0 cl1 swiftstore reg-2-zone-2'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D1 cl1 swiftstore reg-2-zone-2'
+
+echo "===> Adding volume nodes to cl1"
+# 2x Volume
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D2 cl1 volume reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D3 cl1 volume reg-2-zone-1'
+
+echo "===> Adding messaging nodes to cl1"
+# 3x Messaging
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D4 cl1 messaging reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D5 cl1 messaging reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D6 cl1 messaging reg-2-zone-1'
+
+echo "===> Adding a tempest node to cl1"
+# 1x tempest
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D7 cl1 tempest reg-2-zone-1'
+
+echo "===> Adding billmon nodes"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D8 cl1 billmon reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add D9 cl1 billmon reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add DA cl1 billmon reg-2-zone-2'
+
+echo "===> Adding billosd nodes"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add DB cl1 billosd reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add DC cl1 billosd reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add DD cl1 billosd reg-2-zone-2'
+
+echo "===> Adding cephosd node"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add DE cl1 cephosd reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add DF cl1 cephosd reg-1-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add E0 cl1 cephosd reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add E1 cl1 cephosd reg-2-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add E2 cl1 cephosd reg-2-zone-2'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add E3 cl1 cephosd reg-2-zone-2'
+
+echo "===> Calculating swift ring"
+# Calculate ring
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli swift-calculate-ring cl1 100 100 100'
+
+exit 0
