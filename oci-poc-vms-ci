@@ -295,13 +295,13 @@ start_vms () {
 					--hostname slave-node-${i} --ram 32
 		;;
 		4|5|6)
-			echo "=> Starting VM $i with 2xHDD and 16 GB RAM (Compute: ${MAC_END})"
+			echo "=> Starting VM $i with 2xHDD and 32 GB RAM (Compute: ${MAC_END})"
 			start_one_vm --first-hdd ${RUNT_DIR}/slave-node-${i}-vda.qcow2 \
 					--second-hdd ${RUNT_DIR}/slave-node-${i}-vdb.qcow2 \
 					--vm-pid-file ${PID_DIR}/slave-node-${i}.pid \
 					--vnc-port ${VM_VNC_PORT} \
 					--boot-dev n --mac-end ${MAC_END} --tap-ifname-end ${i} \
-					--hostname slave-node-${i} --ram 16
+					--hostname slave-node-${i} --ram 32
 		;;
 		7|8|9)
 			echo "=> Starting VM $i with 3xHDD and 10 GB RAM (Ceph OSD: ${MAC_END})"
