@@ -75,7 +75,7 @@ ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C6 cl1 compu
 #ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C5 --nova-reserved-host-memory-mb 8192'
 #ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C6 --nova-reserved-host-memory-mb 8192'
 
-#echo "===> Addig Ceph OSD feature to compute nodes"
+echo "===> Addig Ceph OSD feature to compute nodes"
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C4 --compute-is-cephosd yes'
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C5 --compute-is-cephosd yes'
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C6 --compute-is-cephosd yes'
