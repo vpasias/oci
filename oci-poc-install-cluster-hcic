@@ -48,7 +48,7 @@ if [ "${USE_AUTOMATIC_IPMI_SETUP}" = "yes" ] ; then
 fi
 
 echo "===> Creating cluster cl1"
-ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-create cl1 example.com'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-create cl1 cloud.example.com'
 
 echo "===> Set NTP server for cluster cl1"
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-set cl1 --time-server-host time.google.com'
