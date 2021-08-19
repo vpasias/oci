@@ -49,7 +49,7 @@ if [ "${USE_AUTOMATIC_IPMI_SETUP}" = "yes" ] ; then
 fi
 
 echo "===> Creating cluster cl1"
-ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-create cl1 example.com'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-create cl1 cloud.example.com'
 
 echo "===> Adding networks to cl1"
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add reg1-zone1-net1 cl1 all eth1 none'
