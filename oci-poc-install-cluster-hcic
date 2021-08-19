@@ -1,1 +1,89 @@
+#!/bin/sh
 
+set -e
+#set -x
+
+if ! [ -r /etc/oci-poc/oci-poc.conf ] ; then
+	echo "Cannot read /etc/oci-poc/oci-poc.conf"
+fi
+. /etc/oci-poc/oci-poc.conf
+
+# Check that we really have NUMBER_OF_GUESTS machines available
+# before starting anything
+check_enough_vms_available () {
+	EXPECTED_NUM_OF_SLAVES=${1}
+
+	NUM_VM=$(ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli -csv machine-list | q -d , -H "SELECT COUNT(*) AS count FROM -"')
+	if [ ${NUM_VM} -lt ${EXPECTED_NUM_OF_SLAVES} ] ; then
+		echo "Num of VM too low... exiting"
+		exit 1
+	fi
+}
+
+check_enough_vms_available $((${NUMBER_OF_GUESTS} - 1))
+
+echo "===> Creating regions and locations"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli swift-region-create bdb'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli swift-region-create pub'
+
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli location-create bdb-zone-1 bdb'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli location-create public pub'
+
+echo "===> Creating networks"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create mgmt-net 192.168.101.0 24 bdb-zone-1 no'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create vmnet 192.168.102.0 24 bdb-zone-1 no'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create public 192.168.106.0 24 public yes'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create br-ex 0.0.0.0 24 bdb-zone-1 no'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create br-lb 0.0.0.0 24 bdb-zone-1 no'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create ceph 192.168.107.1 24 bdb-zone-1 no'
+
+# Set the IPMI network
+if [ "${USE_AUTOMATIC_IPMI_SETUP}" = "yes" ] ; then
+	echo "===> Setting-up automatic IPMI assignation"
+	ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-create ipmi 192.168.200.0 24 bdb-zone-1 no'
+	ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-set ipmi --role ipmi --ipmi-match-addr 192.168.0.0 --ipmi-match-cidr 16'
+	ssh ${HOST_NETWORK_PREFIX}.2 "sed -i s/automatic_ipmi_numbering=no/automatic_ipmi_numbering=yes/ /etc/openstack-cluster-installer/openstack-cluster-installer.conf" 1>/dev/null 2>/dev/null
+	ssh ${HOST_NETWORK_PREFIX}.2 "mkdir -p /var/www/.ssh" 1>/dev/null 2>/dev/null
+	ssh ${HOST_NETWORK_PREFIX}.2 "chown www-data:www-data /var/www/.ssh" 1>/dev/null 2>/dev/null
+fi
+
+echo "===> Creating cluster cl1"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-create cl1 example.com'
+
+echo "===> Set NTP server for cluster cl1"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-set cl1 --time-server-host time.google.com'
+
+echo "===> Adding networks to cl1"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add mgmt-net cl1 all eth1 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add vmnet cl1 vm-net eth2 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add public cl1 all eth1 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add br-ex cl1 ovs-bridge eth0 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-set br-ex --bridge-name br-ex'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add br-lb cl1 ovs-bridge eth3 none'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-set br-lb --bridge-name br-lb'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-add ceph cl1 ceph-cluster eth0 none'
+#ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli network-set public --role vip'
+
+echo "===> Adding controller nodes to cl1"
+# 3x Controller machines
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C1 cl1 controller bdb-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C2 cl1 controller bdb-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C3 cl1 controller bdb-zone-1'
+
+echo "===> Adding compute nodes to cl1"
+# 3x Compute
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C4 cl1 compute bdb-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C5 cl1 compute bdb-zone-1'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add C6 cl1 compute bdb-zone-1'
+# Lower the reserved memory, because we don't have much available
+#echo "===> Setting nova-reserved-host-memory-mb to 8192"
+#ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C4 --nova-reserved-host-memory-mb 8192'
+#ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C5 --nova-reserved-host-memory-mb 8192'
+#ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C6 --nova-reserved-host-memory-mb 8192'
+
+echo "===> Addig Ceph OSD feature to compute nodes"
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C4 --compute-is-cephosd yes'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C5 --compute-is-cephosd yes'
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set C6 --compute-is-cephosd yes'
+
+exit 0
