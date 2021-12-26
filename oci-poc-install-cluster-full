@@ -22,6 +22,14 @@ check_enough_vms_available () {
 
 check_enough_vms_available $((${NUMBER_OF_GUESTS} - 1))
 
+echo "===> Setting-up IPMI ports on VMs"
+for i in $(seq 2 $((${NUMBER_OF_GUESTS} + 1))) ; do
+	VM_SERIAL=$(printf "%X\n" $((0xBF + ${i})))
+	VNC_PORT=$((9000 + $i))
+	echo "Setting IPMI for VM with serial: $VM_SERIAL and VNC port: $VNC_PORT"
+	ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-set-ipmi ${VM_SERIAL} yes 192.168.100.1 ${VNC_PORT} ipmiusr test'
+done
+
 echo "===> Creating regions and locations"
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli swift-region-create swift-region1'
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli swift-region-create swift-region2'
@@ -134,6 +142,9 @@ ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add E0 cl1 cepho
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add E1 cl1 cephosd reg-2-zone-1'
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add E2 cl1 cephosd reg-2-zone-2'
 ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli machine-add E3 cl1 cephosd reg-2-zone-2'
+
+echo "===> Reduce the (default) number of fragment in swift"                                                                                                                                                                                 
+ssh -o "StrictHostKeyChecking no" 192.168.100.2 'ocicli cluster-set cl1 --swift-ec-num-data-fragments 6 --swift-ec-num-parity-fragments 2 --swift-ec-enable yes'
 
 echo "===> Calculating swift ring"
 # Calculate ring
